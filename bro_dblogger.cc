@@ -32,7 +32,7 @@
  **/
 
 #include <string>
-#include <vector>
+#include <list>
 #include <map>
 #include <iostream>
 #include <sstream>
@@ -57,19 +57,18 @@ extern "C" {
 using namespace std;
 
 using std::string;
-using std::vector;
+using std::list;
 using std::cout;
 using std::cin;
 using std::cerr;
 
-string default_bro_host = "127.0.0.1";
-string default_bro_port = "47757";
+//string default_bro_host = "127.0.0.1";
+//string default_bro_port = "47757";
 string default_postgresql_host = "127.0.0.1";
 string default_postgresql_port = "5432";
 int default_seconds_between_copyend = 30;
 
-string bro_host, postgresql_host;
-string input_bro_port, postgresql_port;
+string postgresql_host, postgresql_port;
 string postgresql_user, postgresql_password, postgresql_db;
 int seconds_between_copyend;
 
@@ -77,6 +76,12 @@ int debugging = 0;
 int count = -1;
 int seq;
 BroConn *bc;
+
+class BroConnection {
+	public:
+		BroConn *bc;
+};
+std::list<BroConnection> bro_conns;
 
 class PGConnection {
 	public:
@@ -119,32 +124,35 @@ inline std::string stringify(const T& x)
 void usage(void)
 	{
 	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table." << endl <<
- 	"USAGE: bro_dblogger [-H bro_host=localhost] [-P bro_port=47757] [-h postgres_host=localhost] [-p postgres_port=5432] -u postres_user [-w postgres_password] database_name\n";
+ 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -u postgres_user [-P postgres_password] database_name [[bro_host] [bro_port]]\n";
 	exit(0);
 	}
 
-int connect_to_bro()
+BroConn* connect_to_bro(std::string host, std::string port)
 	{
+	BroConn *conn;
+	
 	// now connect to the bro host - on failure, try again three times
 	// the flags here are telling us to block on connect, reconnect in the
 	// event of a connection failure, and queue up events in the event of a
 	// failure to the bro host
-	if (! (bc = bro_conn_new_str( (bro_host + ":" + input_bro_port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE|BRO_CFLAG_DONTCACHE)))
+	if (! (conn = bro_conn_new_str( (host + ":" + port).c_str(), 
+			BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE|BRO_CFLAG_DONTCACHE)))
 		{
-		cerr << endl << "Could not connect to Bro (" << bro_host << ") at " <<
-		        bro_host.c_str() << ":" << input_bro_port.c_str() << endl;
+		cerr << endl << "Could not connect to Bro (" << host.c_str() << ") at " <<
+		        host.c_str() << ":" << port.c_str() << endl;
 		exit(-1);
 		}
 
-	if (! bro_conn_connect(bc)) {
+	if (!bro_conn_connect(conn)) {
 		cerr << endl << "WTF?  Why didn't it connect?" << endl;
 	} else {
 		if(debugging)
-			cerr << "Connected to Bro (" << bro_host << ") at " <<
-			        bro_host.c_str() << ":" << input_bro_port.c_str() << endl;
+			cerr << "Connected to Bro (" << host.c_str() << ") at " <<
+			        host.c_str() << ":" << port.c_str() << endl;
 	}
 	
-	return 0;
+	return conn;
 	}
 	
 int connect_to_postgres(std::string table)
@@ -434,31 +442,24 @@ int main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 
-	bro_host = default_bro_host;
-	input_bro_port = default_bro_port;
+	//bro_host = default_bro_host;
+	//input_bro_port = default_bro_port;
 	postgresql_host = default_postgresql_host;
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
-	while ( (opt = getopt(argc, argv, "H:P:h:p:u:w:ds:?")) != -1)
+	while ( (opt = getopt(argc, argv, "h:p:u:P:ds:?")) != -1)
 	{
 		switch (opt)
 			{
 			case 'd':
 				debugging++;
- 
-				if (debugging == 1)
-					bro_debug_messages = 1;
- 
+				
 				if (debugging > 1)
+					bro_debug_messages = 1;
+				
+				if (debugging > 2)
 					bro_debug_calltrace = 1;
-				break;
- 
-			case 'H':
-				bro_host = optarg;
-			
-			case 'P':
-				input_bro_port = optarg;
 				break;
 			
 			case 'h':
@@ -473,7 +474,7 @@ int main(int argc, char **argv)
 				postgresql_user = optarg;
 				break;
 			
-			case 'w':
+			case 'P':
 				postgresql_password = optarg;
 				break;
 			
@@ -494,20 +495,31 @@ int main(int argc, char **argv)
 	if (argc > 0)
 		postgresql_db = argv[0];
 
-	connect_to_bro();
-	bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
-	bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
-	bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
-	bro_event_registry_request(bc);
-
-	fd = bro_conn_get_fd(bc);
+	BroConn *bc;
+	BroConnection conn;
 	FD_ZERO(&readfds);
-	FD_SET(fd, &readfds);
+	for(int i=1; i<argc; i+=2)
+		{
+		string host(argv[i]);
+		string port(argv[i+1]);
+		bc = connect_to_bro(host, port);
+		conn.bc=bc;
+		bro_conns.push_front(conn);
+		bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
+		bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
+		bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
+		bro_event_registry_request(bc);
+
+		fd = bro_conn_get_fd(bc);
+		FD_SET(fd, &readfds);
+		}
 	
+	list<BroConnection>::iterator iter;
 	while(select(fd+1, &readfds, NULL, NULL, NULL))
 		{
 		// Grab data from Bro and run all callbacks
-		bro_conn_process_input(bc);
+		for( iter=bro_conns.begin(); iter != bro_conns.end(); iter++)
+			bro_conn_process_input(iter->bc);
 		}
 	}
 
