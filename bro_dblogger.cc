@@ -296,7 +296,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		type=0;
 		data = bro_record_get_nth_val(r, i, &type);
 		
-		field_name = bro_record_get_nth_name(r, i);
+		field_name = strdup(bro_record_get_nth_name(r, i));
 		field_names.append(field_name);
 		
 		std::string str;
@@ -316,7 +316,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				output_value.append(stringify( (*((bro_port *) data)).port_num ));
 				break;
 			case BRO_TYPE_STRING:
-				str = stringify(bro_string_get_data((BroString*) data));
+				str = stringify(strdup((const char*)bro_string_get_data((BroString*) data)));
 				// Double up backslashes so as not to attempt to put 
 				// raw data into the database.
 				for( x=str.length(); x>-1; x--)
