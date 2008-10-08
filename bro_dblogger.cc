@@ -62,15 +62,18 @@ using std::cout;
 using std::cin;
 using std::cerr;
 
-string default_host = "127.0.0.1";
-string default_port = "47757";
+string default_bro_host = "127.0.0.1";
+string default_bro_port = "47757";
+string default_postgresql_host = "127.0.0.1";
+string default_postgresql_port = "5432";
 int default_seconds_between_copyend = 30;
 
-string host;
-string port;
+string bro_host, postgresql_host;
+string input_bro_port, postgresql_port;
+string postgresql_user, postgresql_password, postgresql_db;
 int seconds_between_copyend;
-int debugging = 0;
 
+int debugging = 0;
 int count = -1;
 int seq;
 BroConn *bc;
@@ -115,21 +118,8 @@ inline std::string stringify(const T& x)
 
 void usage(void)
 	{
-	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table.";
-	//cout << "broclient - sends events with string arguments from stdin to a\n"
-	//	"	running Bro\n"
-	//	"USAGE: broclient [-p port=47760] [host=127.0.0.1]\n"
-	//	"Input format (each line): event_name type=arg1 type=arg2...\n";
-	exit(0);
-	}
-
-void showtypes(void)
-	{
-	cout << "Legitimate event types are:\n"
-		"	string, int, count, double, bool, time, \n"
-		"	interval, port, addr, net, subnet\n\n"
-		"	examples: string=foo, port=23/tcp, addr=10.10.10.10, \n"
-		"	net=10.10.10.0 and subnet=10.0.0.0/8\n";
+	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table." << endl <<
+ 	"USAGE: bro_dblogger [-H bro_host=localhost] [-P bro_port=47757] [-h postgres_host=localhost] [-p postgres_port=5432] -u postres_user [-w postgres_password] database_name\n";
 	exit(0);
 	}
 
@@ -139,10 +129,10 @@ int connect_to_bro()
 	// the flags here are telling us to block on connect, reconnect in the
 	// event of a connection failure, and queue up events in the event of a
 	// failure to the bro host
-	if (! (bc = bro_conn_new_str( (host + ":" + port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE)))
+	if (! (bc = bro_conn_new_str( (bro_host + ":" + input_bro_port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE)))
 		{
-		cerr << endl << "Could not connect to Bro (" << host << ") at " <<
-		        host.c_str() << ":" << port.c_str() << endl;
+		cerr << endl << "Could not connect to Bro (" << bro_host << ") at " <<
+		        bro_host.c_str() << ":" << input_bro_port.c_str() << endl;
 		exit(-1);
 		}
 
@@ -150,8 +140,8 @@ int connect_to_bro()
 		cerr << endl << "WTF?  Why didn't it connect?" << endl;
 	} else {
 		if(debugging)
-			cerr << endl << "Connected to Bro (" << host << ") at " <<
-		        	host.c_str() << ":" << port.c_str() << endl;
+			cerr << "Connected to Bro (" << bro_host << ") at " <<
+			        bro_host.c_str() << ":" << input_bro_port.c_str() << endl;
 	}
 	
 	return 0;
@@ -161,18 +151,30 @@ int connect_to_postgres(std::string table)
 	{
 	if(pg_conns.count(table)>0)
 		return 0;
-		
-	if( !(pg_conns[table].conn = PQconnectStart("host=127.0.0.1 port=5555 user=bro password=qwerty dbname=netsec")) )
+	
+	std::string connect_string =
+		"host="+postgresql_host+" port="+postgresql_port+" user="+postgresql_user+" password="+postgresql_password+" dbname="+postgresql_db+" ";
+	if( !(pg_conns[table].conn = PQconnectStart(connect_string.c_str())) )
+		{
 		cerr << "Total screw up with the postgres connection" << endl;
-	if( PQstatus(pg_conns[table].conn) == CONNECTION_BAD )
-		cerr << "hmm.. postgres connection status is bad" << endl;
+		exit(-1);
+		}
 
 	if(debugging)
 		cout << "Connecting to PostgreSQL";
 	while( PQconnectPoll(pg_conns[table].conn) != PGRES_POLLING_OK )
 		{
+		if( PQstatus(pg_conns[table].conn) == CONNECTION_BAD )
+			{
+			cout << PQerrorMessage(pg_conns[table].conn) <<endl;
+			exit(-1);
+			}
+			
 		if(debugging)
-			cout << "."; cout.flush();
+			{
+			cout << "."; 
+			cout.flush();
+			}
 		sleep(1);
 		}
 	if(debugging)
@@ -433,11 +435,13 @@ int main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 
-	host = default_host;
-	port = default_port;
+	bro_host = default_bro_host;
+	input_bro_port = default_bro_port;
+	postgresql_host = default_postgresql_host;
+	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
-	while ( (opt = getopt(argc, argv, "p:dh?s:")) != -1)
+	while ( (opt = getopt(argc, argv, "H:P:h:p:u:w:ds:?")) != -1)
 	{
 		switch (opt)
 			{
@@ -451,19 +455,34 @@ int main(int argc, char **argv)
 					bro_debug_calltrace = 1;
 				break;
  
+			case 'H':
+				bro_host = optarg;
+			
+			case 'P':
+				input_bro_port = optarg;
+				break;
+			
 			case 'h':
-			case '?':
-				usage();
+				postgresql_host = optarg;
 				break;
- 
+			
 			case 'p':
-				port = optarg;
+				postgresql_port = optarg;
 				break;
-				
+			
+			case 'u':
+				postgresql_user = optarg;
+				break;
+			
+			case 'w':
+				postgresql_password = optarg;
+				break;
+			
 			case 's':
 				seconds_between_copyend = atoi(optarg);
 				break;
- 
+			 
+			case '?':
 			default:
 				usage();
 				break;
@@ -474,7 +493,7 @@ int main(int argc, char **argv)
 	argv += optind;
 
 	if (argc > 0)
-		host = argv[0];
+		postgresql_db = argv[0];
 
 	connect_to_bro();
 	bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
