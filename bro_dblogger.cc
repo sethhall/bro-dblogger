@@ -38,6 +38,7 @@ int default_seconds_between_copyend = 30;
 string host;
 string port;
 int seconds_between_copyend;
+int debugging = 0;
 
 int count = -1;
 int seq;
@@ -107,7 +108,6 @@ int connect_to_bro()
 	// the flags here are telling us to block on connect, reconnect in the
 	// event of a connection failure, and queue up events in the event of a
 	// failure to the bro host
-	int c=0;
 	if (! (bc = bro_conn_new_str( (host + ":" + port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE)))
 		{
 		cerr << endl << "Could not connect to Bro (" << host << ") at " <<
@@ -118,8 +118,9 @@ int connect_to_bro()
 	if (! bro_conn_connect(bc)) {
 		cerr << endl << "WTF?  Why didn't it connect?" << endl;
 	} else {
-		cerr << endl << "Connected to Bro (" << host << ") at " <<
-		        host.c_str() << ":" << port.c_str() << endl;
+		if(debugging)
+			cerr << endl << "Connected to Bro (" << host << ") at " <<
+		        	host.c_str() << ":" << port.c_str() << endl;
 	}
 	
 	return 0;
@@ -135,28 +136,95 @@ int connect_to_postgres(std::string table)
 	if( PQstatus(pg_conns[table].conn) == CONNECTION_BAD )
 		cerr << "hmm.. postgres connection status is bad" << endl;
 
-	cout << "Connecting to PostgreSQL";
+	if(debugging)
+		cout << "Connecting to PostgreSQL";
 	while( PQconnectPoll(pg_conns[table].conn) != PGRES_POLLING_OK )
 		{
-		cout << "."; 
-		cout.flush();
+		if(debugging)
+			cout << "."; cout.flush();
 		sleep(1);
 		}
-	cout << "done" << endl;
+	if(debugging)
+		cout << "done" << endl;
 
 	PQsetnonblocking(pg_conns[table].conn, 1);
 	if(PQisnonblocking(pg_conns[table].conn))
-		cout << "PostgreSQL is in non-blocking mode" << endl;
-
+		{
+		if(debugging)
+			cout << "PostgreSQL is in non-blocking mode" << endl;
+		}
 	return 0;
 	}
+	
+void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
+	{
+	char *error_message = NULL;
+	
+	if(debugging)
+		cout << "Flushing all active COPY queries to the database" << endl;
+	
+	if( meta->ev_numargs > 0 )
+		cerr << "db_log_flush_all takes no arguments, but " << meta->ev_numargs << " were given" << endl;
+	
+	map<string,PGConnection>::iterator iter;   
+	for( iter = pg_conns.begin(); iter != pg_conns.end(); iter++ )
+		{
+		if(PQputCopyEnd(iter->second.conn, error_message) != 1)
+			cerr << "ERROR: " << PQerrorMessage(iter->second.conn) << error_message << endl;
+		else
+			{
+			if(debugging)
+				cout << "Inserting " << iter->second.records << " records into " << iter->first << "." << endl;
+			}
+		
+		}
+		
+	user_data=NULL;
+	meta=NULL;	
+	}
+	
+void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
+	{
+	char *error_message = NULL;
+	std::string table;
+
+	if( meta->ev_numargs != 1 )
+		{
+		cerr << "db_log_flush takes one arguments, but " << meta->ev_numargs << " were given" << endl;
+		return;
+		}
+		
+	table = (const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data );
+
+	if(debugging)
+		cout << "Flushing active COPY query for table '" << table << "' to the database" << endl;
+
+	if(pg_conns.count(table) > 0)
+		{
+		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
+			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
+		else
+			{
+			if(debugging)
+				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+			}
+		}
+	else
+		{
+		cerr << "Attempted to flush table '" << table << "', but no active query for that table exists." << endl;
+		}
+
+	user_data=NULL;
+	meta=NULL;	
+	}
+
 	
 //global db_log: event(db_table: string, data: any);
 void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
 	int i=0;
 	int type=0;
-	int total_size,size=0;
+	int diff_seconds;
 	char *error_message = NULL;
 	
 	struct in_addr ip={0};
@@ -168,16 +236,16 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	    meta->ev_args[0].arg_type != BRO_TYPE_STRING ||
 	    meta->ev_args[1].arg_type != BRO_TYPE_RECORD)
 		{
-		cerr << "Arguments to the db_log callback are incorrect! (arity and/or type)" << endl;
+		cerr << "Arguments to the db_log callback are incorrect! (number and/or type)" << endl;
 		return;
 		}
 		
-	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));
+	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));	
 
 	// If try_it is false, skip all of this.  This query has had a fatal error.
-	if( pg_conns.count(table)>0 && pg_conns[table].try_it==false )
+	if( pg_conns.count(table)>0 && !pg_conns[table].try_it )
 		return;
-		
+	
 	BroRecord* r = (BroRecord*) meta->ev_args[1].arg_data;
 	void* data;
 	const char* field_name;
@@ -195,12 +263,12 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		type=0;
 		data = bro_record_get_nth_val(r, i, &type);
 		
-		//if(pg_conns.count(table)>0 && pg_conns[table].query.length() == 0)
-		//	{
-			field_name = bro_record_get_nth_name(r, i);
-			field_names.append(field_name);
-		//	}
-			
+		field_name = bro_record_get_nth_name(r, i);
+		field_names.append(field_name);
+		
+		std::string str;
+		int x;
+		
 		if(data==NULL)
 			{
 			cerr << "data couldn't be grabbed from record!" << endl;
@@ -211,8 +279,17 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			case BRO_TYPE_INT:
 				output_value.append(stringify(*((int *) data)));
 				break;
+			case BRO_TYPE_PORT:
+				output_value.append(stringify( (*((bro_port *) data)).port_num ));
+				break;
 			case BRO_TYPE_STRING:
-				output_value.append((const char*) bro_string_get_data( (BroString*) data));
+				str = stringify(bro_string_get_data((BroString*) data));
+				// Double up backslashes so as not to attempt to put 
+				// raw data into the database.
+				for( x=str.length(); x>-1; x--)
+					if(str.compare(x,1,"\\")==0)
+						str.insert(x+1, "\\");
+				output_value.append(str);
 				break;
 			case BRO_TYPE_COUNT:
 				output_value.append(stringify(*((uint32 *) data)));
@@ -247,22 +324,14 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		}
 	else
 		{
+		// Check for errors from earlier queries...
 		PGresult *result = PQgetResult(pg_conns[table].conn);
-		switch(PQresultStatus(result))
+		if(PQresultStatus(result) == PGRES_FATAL_ERROR)
 			{
-			case PGRES_TUPLES_OK:
-			case PGRES_COMMAND_OK:
-			case PGRES_EMPTY_QUERY:
-			case PGRES_NONFATAL_ERROR:
-				//cout << "Not in a Copy query (for " << table << ").  Running one..." << endl;
-				PGresult *result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
-				PQclear(result);
-				break;
-			case PGRES_FATAL_ERROR:
-				cout << PQerrorMessage(pg_conns[table].conn) << endl;
-				pg_conns[table].try_it=false;
-				return;
-				break;
+			cerr << "On table (" << table << ") -- " << PQerrorMessage(pg_conns[table].conn) << endl;
+			pg_conns[table].try_it=false;
+			PQclear(result);
+			return;
 			}
 		PQclear(result);
 		}
@@ -272,7 +341,8 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	PQclear(result);
 	if(result_status != PGRES_COPY_IN)
 		{
-		cout << "Executing: " << pg_conns[table].query << endl;
+		if(debugging)
+			cout << "Executing: " << pg_conns[table].query << endl;
 		PGresult *result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
 		if(PQresultStatus(result) == PGRES_FATAL_ERROR)
 			{
@@ -284,24 +354,29 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		PQclear(result);
 		}
 
-	cout << ".";
-	cout.flush();
-	
+	if(debugging)
+		{
+		cout << ".";
+		cout.flush();
+		}
+		
 	output_value.append("\n");
 	if(PQputCopyData(pg_conns[table].conn, output_value.c_str(), output_value.length()) != 1)
-		cerr << "Put copy data failed! " << PQerrorMessage(pg_conns[table].conn) << endl;
+		cerr << "Put copy data failed! -- " << PQerrorMessage(pg_conns[table].conn) << endl;
 	else
 		pg_conns[table].records++;
 		
-	int diff_seconds = time((time_t *)NULL) - pg_conns[table].last_insert;
-	if(diff_seconds > seconds_between_copyend && pg_conns[table].try_it)
+	diff_seconds = time((time_t *)NULL) - pg_conns[table].last_insert;
+	if(diff_seconds > seconds_between_copyend)
 		{
 		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
 			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
 		else
-			cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
-		
-		// Ruin the fact that I'm trying to do things asynchronously.
+			{
+			if(debugging)
+				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+			}
+			
 		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
 			{
 			//cout << "pg is busy" << endl;
@@ -310,7 +385,9 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		pg_conns[table].records=0;
 		pg_conns[table].last_insert = time((time_t *)NULL);
 		}
-		
+	
+	user_data=NULL;
+	meta=NULL;	
 	}
 
 int main(int argc, char **argv)
@@ -318,13 +395,10 @@ int main(int argc, char **argv)
 	bro_debug_messages  = 0;
 	bro_debug_calltrace = 0;
 
-	int fp,rc,n;
-	int j;
+	int fd;
 	fd_set readfds;
-	char buf[1024];
-	struct timeval tv;
 	
-	int opt, debugging = 0;
+	int opt = 0;
 	extern char *optarg;
 	extern int optind;
 
@@ -372,20 +446,17 @@ int main(int argc, char **argv)
 		host = argv[0];
 
 	connect_to_bro();
-	cout << "connected!" << endl;
 	bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
-	cout << "event registered" << endl;
+	bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
+	bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
 	bro_event_registry_request(bc);
-	cout << "event registry request" << endl;
 
-	int fd = bro_conn_get_fd(bc);
-	fd_set readset;
-	FD_ZERO(&readset);
-	FD_SET(fd, &readset);
+	fd = bro_conn_get_fd(bc);
+	FD_ZERO(&readfds);
+	FD_SET(fd, &readfds);
 	
-	while(select(fd+1, &readset, NULL, NULL, NULL))
+	while(select(fd+1, &readfds, NULL, NULL, NULL))
 		{
-		//cout << endl << "********processing input*********" << endl;
 		// Grab data from Bro and run all callbacks
 		bro_conn_process_input(bc);
 		}
