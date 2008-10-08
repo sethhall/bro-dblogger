@@ -129,7 +129,7 @@ int connect_to_bro()
 	// the flags here are telling us to block on connect, reconnect in the
 	// event of a connection failure, and queue up events in the event of a
 	// failure to the bro host
-	if (! (bc = bro_conn_new_str( (bro_host + ":" + input_bro_port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE)))
+	if (! (bc = bro_conn_new_str( (bro_host + ":" + input_bro_port).c_str(), BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE|BRO_CFLAG_DONTCACHE)))
 		{
 		cerr << endl << "Could not connect to Bro (" << bro_host << ") at " <<
 		        bro_host.c_str() << ":" << input_bro_port.c_str() << endl;
@@ -296,7 +296,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		type=0;
 		data = bro_record_get_nth_val(r, i, &type);
 		
-		field_name = strdup(bro_record_get_nth_name(r, i));
+		field_name = bro_record_get_nth_name(r, i);
 		field_names.append(field_name);
 		
 		std::string str;
@@ -316,7 +316,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				output_value.append(stringify( (*((bro_port *) data)).port_num ));
 				break;
 			case BRO_TYPE_STRING:
-				str = stringify(strdup((const char*)bro_string_get_data((BroString*) data)));
+				str = stringify(bro_string_get_data((BroString*) data));
 				// Double up backslashes so as not to attempt to put 
 				// raw data into the database.
 				for( x=str.length(); x>-1; x--)
@@ -345,7 +345,6 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				break;
 			}
 		}
-	bro_record_free(r);
 		
 	if( pg_conns.count(table)<1 )
 		{
