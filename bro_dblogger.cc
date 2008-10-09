@@ -309,6 +309,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		
 		std::string str;
 		int x;
+		int str_begin=0;
 		
 		if(data==NULL)
 			{
@@ -327,9 +328,16 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				str = stringify(bro_string_get_data((BroString*) data));
 				// Double up backslashes so as not to attempt to put 
 				// raw data into the database.
-				for( x=str.length(); x>-1; x--)
+				for( x=str.length(); x>str_begin; x--)
+					{
 					if(str.compare(x,1,"\\")==0)
 						str.insert(x+1, "\\");
+					if(str.compare(x,1,"\t")==0)
+						{
+						str.erase(x,1);
+						str_begin++;
+						}
+					}
 				output_value.append(str);
 				break;
 			case BRO_TYPE_COUNT:
@@ -401,6 +409,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		}
 		
 	output_value.append("\n");
+	cout << output_value;
 	if(PQputCopyData(pg_conns[table].conn, output_value.c_str(), output_value.length()) != 1)
 		cerr << "Put copy data failed! -- " << PQerrorMessage(pg_conns[table].conn) << endl;
 	else
