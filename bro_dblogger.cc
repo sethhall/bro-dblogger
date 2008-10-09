@@ -505,29 +505,45 @@ int main(int argc, char **argv)
 
 	BroConn *bc;
 	BroConnection conn;
-	FD_ZERO(&readfds);
+	int status;
+	
 	for(int i=1; i<argc; i+=2)
 		{
 		string host(argv[i]);
 		string port(argv[i+1]);
-		bc = connect_to_bro(host, port);
-		conn.bc=bc;
-		bro_conns.push_front(conn);
-		bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
-		bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
-		bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
-		bro_event_registry_request(bc);
+			
+		int pid = fork();
+		
+		if(pid < 0)
+			{
+			cerr << "Couldn't fork children, aborting." << endl;
+			exit(-1);
+			}
+	    
+		if(pid==0)
+			{
+			bc = connect_to_bro(host, port);
+			bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
+			bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
+			bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
+			bro_event_registry_request(bc);
 
-		fd = bro_conn_get_fd(bc);
-		FD_SET(fd, &readfds);
-		}
-	
-	list<BroConnection>::iterator iter;
-	while(select(fd+1, &readfds, NULL, NULL, NULL))
-		{
-		// Grab data from Bro and run all callbacks
-		for( iter=bro_conns.begin(); iter != bro_conns.end(); iter++)
-			bro_conn_process_input(iter->bc);
+			fd = bro_conn_get_fd(bc);
+			FD_ZERO(&readfds);
+			FD_SET(fd, &readfds);
+			while(select(fd+1, &readfds, NULL, NULL, NULL))
+				{
+				bro_conn_process_input(bc);
+				}
+			}
+		else if(pid>0)
+			{
+			if(debugging)
+				cerr << "Spawned child process.  Pid:" << pid << endl;
+			wait(&status);
+			cout << "PARENT: Child's exit code is:" << WEXITSTATUS(status) << endl;
+			exit(0);
+			}
 		}
 	}
 
