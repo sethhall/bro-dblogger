@@ -409,7 +409,6 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		}
 		
 	output_value.append("\n");
-	cout << output_value;
 	if(PQputCopyData(pg_conns[table].conn, output_value.c_str(), output_value.length()) != 1)
 		cerr << "Put copy data failed! -- " << PQerrorMessage(pg_conns[table].conn) << endl;
 	else
