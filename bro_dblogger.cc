@@ -273,6 +273,9 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	std::string field_names("");
 	std::string output_value("");
 	
+	PGresult *result;
+	int result_status;
+	
 	if( meta->ev_numargs != 2 ||
 	    meta->ev_args[0].arg_type != BRO_TYPE_STRING ||
 	    meta->ev_args[1].arg_type != BRO_TYPE_RECORD)
@@ -384,8 +387,8 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		//	}
 		//}
 	
-	PGresult *result = PQgetResult(pg_conns[table].conn);
-	int result_status = PQresultStatus(result);
+	result = PQgetResult(pg_conns[table].conn);
+	result_status = PQresultStatus(result);
 	PQclear(result);
 	if(result_status != PGRES_COPY_IN)
 		{
