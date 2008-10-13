@@ -373,7 +373,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		pg_conns[table].try_it = true;
 		pg_conns[table].query = "COPY " + table + " (" + field_names + ") FROM STDIN";
 		}
-	else
+	//else
 		//{
 		//// Check for errors from earlier queries...
 		//PGresult *result = PQgetResult(pg_conns[table].conn);
