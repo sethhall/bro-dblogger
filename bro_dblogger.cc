@@ -371,18 +371,18 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		pg_conns[table].query = "COPY " + table + " (" + field_names + ") FROM STDIN";
 		}
 	else
-		{
-		// Check for errors from earlier queries...
-		PGresult *result = PQgetResult(pg_conns[table].conn);
-		if(PQresultStatus(result) == PGRES_FATAL_ERROR)
-			{
-			cerr << "On table (" << table << ") -- " << PQerrorMessage(pg_conns[table].conn) << endl;
-			pg_conns[table].try_it=false;
-			PQclear(result);
-			return;
-			}
-		PQclear(result);
-		}
+		//{
+		//// Check for errors from earlier queries...
+		//PGresult *result = PQgetResult(pg_conns[table].conn);
+		//int result_status = PQresultStatus(result);
+		//PQclear(result);
+		//if(result_status == PGRES_FATAL_ERROR)
+		//	{
+		//	cerr << "On table (" << table << ") -- " << PQerrorMessage(pg_conns[table].conn) << endl;
+		//	pg_conns[table].try_it=false;
+		//	return;
+		//	}
+		//}
 	
 	PGresult *result = PQgetResult(pg_conns[table].conn);
 	int result_status = PQresultStatus(result);
@@ -391,15 +391,16 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		{
 		if(debugging)
 			cout << "Executing: " << pg_conns[table].query << endl;
-		PGresult *result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
-		if(PQresultStatus(result) == PGRES_FATAL_ERROR)
+		result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
+		result_status = PQresultStatus(result);
+		PQclear(result);
+		if(result_status == PGRES_FATAL_ERROR)
 			{
-			cerr << PQerrorMessage(pg_conns[table].conn);
+			cerr << "On table (" << table << ") -- " << PQerrorMessage(pg_conns[table].conn) << endl;
+			cerr << "    Removing the '" << table << "' table due to failure." << endl;
 			pg_conns[table].try_it=false;
-			cerr << "Removing the '" << table << "' table due to failure." << endl;
 			return;
 			}
-		PQclear(result);
 		}
 
 	if(debugging)
@@ -503,46 +504,24 @@ int main(int argc, char **argv)
 	if (argc > 0)
 		postgresql_db = argv[0];
 
-	BroConn *bc;
-	BroConnection conn;
-	int status;
-	
+	BroConn *bc;	
 	for(int i=1; i<argc; i+=2)
 		{
 		string host(argv[i]);
 		string port(argv[i+1]);
 			
-		int pid = fork();
-		
-		if(pid < 0)
-			{
-			cerr << "Couldn't fork children, aborting." << endl;
-			exit(-1);
-			}
-	    
-		if(pid==0)
-			{
-			bc = connect_to_bro(host, port);
-			bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
-			bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
-			bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
-			bro_event_registry_request(bc);
+		bc = connect_to_bro(host, port);
+		bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
+		bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
+		bro_event_registry_add_compact(bc, "db_log_flush", db_log_flush_event_handler, NULL);
+		bro_event_registry_request(bc);
 
-			fd = bro_conn_get_fd(bc);
-			FD_ZERO(&readfds);
-			FD_SET(fd, &readfds);
-			while(select(fd+1, &readfds, NULL, NULL, NULL))
-				{
-				bro_conn_process_input(bc);
-				}
-			}
-		else if(pid>0)
+		fd = bro_conn_get_fd(bc);
+		FD_ZERO(&readfds);
+		FD_SET(fd, &readfds);
+		while(select(fd+1, &readfds, NULL, NULL, NULL))
 			{
-			if(debugging)
-				cerr << "Spawned child process.  Pid:" << pid << endl;
-			wait(&status);
-			cout << "PARENT: Child's exit code is:" << WEXITSTATUS(status) << endl;
-			exit(0);
+			bro_conn_process_input(bc);
 			}
 		}
 	}
