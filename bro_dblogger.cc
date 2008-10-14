@@ -41,7 +41,7 @@ int seconds_between_copyend;
 int debugging = 0;
 BroConn *bc;
 
-// Only use this if connections to multiple Bros is implemented.
+// Only use this if connections to multiple Bro instances is implemented.
 //class BroConnection {
 //	public:
 //		BroConn *bc;
@@ -86,7 +86,7 @@ inline std::string stringify(const T& x)
 void usage(void)
 	{
 	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table." << endl <<
- 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -u postgres_user [-P postgres_password] database_name [[bro_host] [bro_port]]\n";
+ 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] [bro_host=localhost] [bro_port=47757]" << endl;
 	exit(0);
 	}
 
@@ -131,7 +131,7 @@ int connect_to_postgres(std::string table)
 		}
 
 	if(debugging)
-		cout << "Connecting to PostgreSQL";
+		cout << endl << "Connecting to PostgreSQL";
 	while( PQconnectPoll(pg_conns[table].conn) != PGRES_POLLING_OK )
 		{
 		if( PQstatus(pg_conns[table].conn) == CONNECTION_BAD )
@@ -209,7 +209,7 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		else
 			{
 			if(debugging)
-				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 		}
 	else
@@ -230,7 +230,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	char *error_message = NULL;
 	
 	struct in_addr ip={0};
-	std::string table;
+	std::string table("");
 	std::string field_names("");
 	std::string output_value("");
 	
@@ -250,7 +250,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	// If try_it is false, skip all of this.  This query has had a fatal error.
 	if( pg_conns.count(table)>0 && !pg_conns[table].try_it )
 		{
-		cerr << "Some fatal error with " << table << endl;
+		cerr << "ERROR: Some earlier fatal error with " << table << endl;
 		return;
 		}
 	
@@ -370,7 +370,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	else
 		pg_conns[table].records++;
 		
-	diff_seconds = time((time_t *)NULL) - pg_conns[table].last_insert;
+	diff_seconds = difftime(time((time_t *)NULL), pg_conns[table].last_insert);
 	if(diff_seconds > seconds_between_copyend)
 		{
 		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
@@ -380,7 +380,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		else
 			{
 			if(debugging)
-				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 			
 		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
@@ -412,11 +412,15 @@ int main(int argc, char **argv)
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
-	while ( (opt = getopt(argc, argv, "h:p:u:P:ds:?")) != -1)
+	while ( (opt = getopt(argc, argv, "d:h:p:u:P:Ds:?")) != -1)
 		{
 		switch (opt)
 			{
 			case 'd':
+				postgresql_db = optarg;
+				break;
+			
+			case 'D':
 				debugging++;
 				
 				if (debugging > 1)
@@ -456,11 +460,8 @@ int main(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc > 0)
-		postgresql_db = argv[0];
-
 	BroConn *bc;	
-	for(int i=1; i<argc; i+=2)
+	for(int i=0; i<argc; i+=2)
 		{
 		string host(argv[i]);
 		string port(argv[i+1]);
