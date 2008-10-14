@@ -1,36 +1,3 @@
-/*
- * Copyright (c) 2008, Seth Hall <hall.692@osu.edu>
- * All rights reserved.
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- * 
- * (1) Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- * 
- * (2) Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- * 
- * (3) Neither the name of the University of California, Lawrence Berkeley
- *     National Laboratory, U.S. Dept. of Energy, International Computer
- *     Science Institute, nor the names of contributors may be used to endorse
- *     or promote products derived from this software without specific prior
- *     written permission.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- **/
-
 #include <string>
 #include <list>
 #include <map>
@@ -62,8 +29,6 @@ using std::cout;
 using std::cin;
 using std::cerr;
 
-//string default_bro_host = "127.0.0.1";
-//string default_bro_port = "47757";
 string default_postgresql_host = "127.0.0.1";
 string default_postgresql_port = "5432";
 int default_seconds_between_copyend = 30;
@@ -94,10 +59,7 @@ class PGConnection {
 		int records;
 
 		// Unix timestamp of last CopyEnd.
-		uint32 last_insert;
-		
-		// This is an initial guess at how many records should be done per insert.
-		int records_per_insert;
+		time_t last_insert;
 		
 		// This is if the COPY query should be attempted again.
 		bool try_it;
@@ -202,7 +164,7 @@ void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *met
 	char *error_message = NULL;
 	
 	if(debugging)
-		cout << "Flushing all active COPY queries to the database" << endl;
+		cout << endl << "Flushing all active COPY queries to the database" << endl;
 	
 	if( meta->ev_numargs > 0 )
 		cerr << "db_log_flush_all takes no arguments, but " << meta->ev_numargs << " were given" << endl;
@@ -215,7 +177,7 @@ void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *met
 		else
 			{
 			if(debugging)
-				cout << "Inserting " << iter->second.records << " records into " << iter->first << "." << endl;
+				cout << endl << "Inserting " << iter->second.records << " records into " << iter->first << "." << endl;
 			}
 		
 		}
@@ -393,7 +355,8 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	if(result_status != PGRES_COPY_IN)
 		{
 		if(debugging)
-			cout << "Executing: " << pg_conns[table].query << endl;
+			cout << endl << "Executing: " << pg_conns[table].query << endl;
+		
 		result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
 		result_status = PQresultStatus(result);
 		PQclear(result);
@@ -422,7 +385,9 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	if(diff_seconds > seconds_between_copyend)
 		{
 		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
+			{
 			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
+			}
 		else
 			{
 			if(debugging)
@@ -454,14 +419,12 @@ int main(int argc, char **argv)
 	extern char *optarg;
 	extern int optind;
 
-	//bro_host = default_bro_host;
-	//input_bro_port = default_bro_port;
 	postgresql_host = default_postgresql_host;
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
 	while ( (opt = getopt(argc, argv, "h:p:u:P:ds:?")) != -1)
-	{
+		{
 		switch (opt)
 			{
 			case 'd':
@@ -499,7 +462,7 @@ int main(int argc, char **argv)
 				usage();
 				break;
 			}
-	}
+		}
  
 	argc -= optind;
 	argv += optind;
