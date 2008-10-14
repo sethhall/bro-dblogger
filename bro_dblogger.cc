@@ -1,3 +1,4 @@
+
 #include <string>
 #include <list>
 #include <map>
@@ -38,15 +39,14 @@ string postgresql_user, postgresql_password, postgresql_db;
 int seconds_between_copyend;
 
 int debugging = 0;
-int count = -1;
-int seq;
 BroConn *bc;
 
-class BroConnection {
-	public:
-		BroConn *bc;
-};
-std::list<BroConnection> bro_conns;
+// Only use this if connections to multiple Bros is implemented.
+//class BroConnection {
+//	public:
+//		BroConn *bc;
+//};
+//std::list<BroConnection> bro_conns;
 
 class PGConnection {
 	public:
@@ -98,20 +98,20 @@ BroConn* connect_to_bro(std::string host, std::string port)
 	// the flags here are telling us to block on connect, reconnect in the
 	// event of a connection failure, and queue up events in the event of a
 	// failure to the bro host
-	if (! (conn = bro_conn_new_str( (host + ":" + port).c_str(), 
-			BRO_CFLAG_RECONNECT|BRO_CFLAG_ALWAYS_QUEUE|BRO_CFLAG_DONTCACHE)))
+	if (! (conn = bro_conn_new_str( (host + ":" + port).c_str(), BRO_CFLAG_NONE)))
 		{
-		cerr << endl << "Could not connect to Bro (" << host.c_str() << ") at " <<
-		        host.c_str() << ":" << port.c_str() << endl;
+		cerr << endl << "Could not connect to Bro (" << host << ") at " <<
+		        host << ":" << port << endl;
 		exit(-1);
 		}
 
 	if (!bro_conn_connect(conn)) {
-		cerr << endl << "WTF?  Why didn't it connect?" << endl;
+		cerr << endl << "Could not connect to Bro at " << host << ":" << port << endl;
+		exit(-1);
 	} else {
 		if(debugging)
-			cerr << "Connected to Bro (" << host.c_str() << ") at " <<
-			        host.c_str() << ":" << port.c_str() << endl;
+			cerr << "Connected to Bro (" << host << ") at " <<
+			        host << ":" << port << endl;
 	}
 	
 	return conn;
@@ -225,7 +225,6 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 //global db_log: event(db_table: string, data: any);
 void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
-	int i=0;
 	int type=0;
 	int diff_seconds;
 	char *error_message = NULL;
@@ -250,14 +249,17 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 
 	// If try_it is false, skip all of this.  This query has had a fatal error.
 	if( pg_conns.count(table)>0 && !pg_conns[table].try_it )
+		{
+		cerr << "Some fatal error with " << table << endl;
 		return;
+		}
 	
 	BroRecord* r = (BroRecord*) meta->ev_args[1].arg_data;
 	void* data;
 	const char* field_name;
 	
 	int rec_len = bro_record_get_length(r);
-	for(i=0 ; i < rec_len ; i++)
+	for(int i=0 ; i < rec_len ; i++)
 		{
 		if(i>0)
 			{
@@ -335,19 +337,6 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		pg_conns[table].try_it = true;
 		pg_conns[table].query = "COPY " + table + " (" + field_names + ") FROM STDIN";
 		}
-	//else
-		//{
-		//// Check for errors from earlier queries...
-		//PGresult *result = PQgetResult(pg_conns[table].conn);
-		//int result_status = PQresultStatus(result);
-		//PQclear(result);
-		//if(result_status == PGRES_FATAL_ERROR)
-		//	{
-		//	cerr << "On table (" << table << ") -- " << PQerrorMessage(pg_conns[table].conn) << endl;
-		//	pg_conns[table].try_it=false;
-		//	return;
-		//	}
-		//}
 	
 	result = PQgetResult(pg_conns[table].conn);
 	result_status = PQresultStatus(result);
