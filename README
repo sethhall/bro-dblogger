@@ -1,0 +1,16 @@
+BUILDING
+--------
+Include the appropriate -L and -I flags for PostgreSQL and Broccoli
+in the Makefile and type 'make'.  I'll fix this at some point. :)
+
+USAGE
+-----
+Your Bro host will need to load the dblog.bro script to allow 
+bro-dblogger to connect and begin receiving its events.  The dblog.bro script
+also defines the event prototypes that are needed for the bro-dblogger to work.
+
+By default, the dblog.bro script allows bro-dblogger to run on the local host,
+but it could be changed so that the database insertion process could run on 
+a separate machine.
+
+The bro-dblogger application shows it's usage with the -h flag.
