@@ -88,11 +88,12 @@ inline std::string stringify(const T& x)
 void usage(void)
 	{
 	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database." << endl <<
-		"USAGE: bro_dblogger -hqD [-H postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl << 
+		"USAGE: bro_dblogger -hqD [-s seconds] [-H postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl << 
 		endl << 
-		"  -h    Display this help message." << endl <<
-		"  -q    Run in quiet mode, only outputting errors." << endl <<
-		"  -D    Enable debugging output from Broccoli (if Broccoli was compiled in debugging mode)." << endl << endl;
+		"  -h       Display this help message." << endl <<
+		"  -q       Run in quiet mode, only outputting errors." << endl <<
+		"  -s secs  Number of seconds between database flushes (default 30)." << endl <<
+		"  -D       Enable debugging output from Broccoli (if Broccoli was compiled in debugging mode)." << endl << endl;
 	exit(0);
 	}
 

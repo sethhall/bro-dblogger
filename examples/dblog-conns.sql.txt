@@ -1,0 +1,27 @@
+CREATE OR REPLACE FUNCTION epoch_to_timestamp()
+  RETURNS trigger AS
+$BODY$
+    BEGIN
+	NEW.timestamp := (SELECT TIMESTAMP WITH TIME ZONE 'epoch' + NEW.epoch * INTERVAL '1 second')::timestamp with time zone;
+	RETURN NEW;
+    END;
+$BODY$
+  LANGUAGE 'plpgsql' VOLATILE
+  COST 100;
+
+CREATE TABLE connections
+( id serial NOT NULL,
+  "timestamp" timestamp with time zone,
+  orig_ip inet,
+  orig_port integer,
+  resp_ip inet,
+  resp_port integer,
+  epoch double precision,
+  CONSTRAINT connections_pkey PRIMARY KEY (id)
+) WITH (OIDS=FALSE);
+
+CREATE TRIGGER epoch_to_timestamp
+  BEFORE INSERT
+  ON connections
+  FOR EACH ROW
+  EXECUTE PROCEDURE epoch_to_timestamp();

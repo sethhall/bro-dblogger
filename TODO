@@ -4,3 +4,6 @@
     - Need might be negated by ability to forward event with "any" data type.
 * Option for providing list of tables to work with in case you aren't 
   interested in logging all of the tables your Bro instances wants to log.
+* Make sure that all queries are flushed at least once every interval
+    - Combination of looping through conns at every interval and a timeout 
+      on the select.

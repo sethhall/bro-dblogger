@@ -1,16 +1,42 @@
+ABOUT
+-----------
+This application is for taking data from the Bro-IDS (http://www.bro-ids.org/)
+and inserting it in realtime into a PostgreSQL database.
+
 BUILDING
---------
+----------
 Include the appropriate -L and -I flags for PostgreSQL and Broccoli
 in the Makefile and type 'make'.  I'll fix this at some point. :)
 
-USAGE
------
+RUNNING IT
+----------
 Your Bro host will need to load the dblog.bro script to allow 
 bro-dblogger to connect and begin receiving its events.  The dblog.bro script
 also defines the event prototypes that are needed for the bro-dblogger to work.
+You need to make sure you're also loading listen-clear for Bro to open a port 
+for remote communications.
 
 By default, the dblog.bro script allows bro-dblogger to run on the local host,
 but it could be changed so that the database insertion process could run on 
 a separate machine.
 
 The bro-dblogger application shows it's usage with the -h flag.
+
+USAGE
+----------
+To use bro-dblogger from Bro, you need to throw the db_log event.  Here's 
+the prototype:
+  global db_log(db_table: string, data: any);
+
+"table" is the name of the table in which you'd like to put the data.
+"data" is a record in which the field names equate directly to the column 
+names in your database.  
+
+Here's how to throw the event properly...
+  event db_log("conns", [$epoch=network_time(),
+                         $orig_h=id$orig_h, 
+                         $orig_p=id$orig_p, 
+                         $resp_h=id$resp_h, 
+                         $resp_p=id$resp_p]);
+
+Check out the examples/dblog-conns.bro script for a complete example. 
