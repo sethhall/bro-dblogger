@@ -86,7 +86,7 @@ inline std::string stringify(const T& x)
 void usage(void)
 	{
 	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table." << endl <<
- 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] [bro_host=localhost] [bro_port=47757]" << endl;
+ 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl;
 	exit(0);
 	}
 
@@ -329,6 +329,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			}
 		}
 		
+	// Connect to the database for the current table if not already done.
 	if( pg_conns.count(table)<1 )
 		{
 		connect_to_postgres(table);
