@@ -5,4 +5,5 @@ LDFLAGS=-lbroccoli -lpq
 bro-dblogger: bro-dblogger.cc
 
 clean:
-	rm -f bro-dblogger
+	rm -f bro-dblogger 
+	rm -rf bro-dblogger.dSYM

@@ -1,4 +1,6 @@
 * Deal with postgresql's partitioning automatically.
 * Deal with loss of connection to PostgreSQL or Bro robustly.
-* Maybe implement ability to connect to multiple Bro instances? 
-  - Need might be negated by ability to forward event with "any" data type.
+* Implement connections to multiple Bro instances? 
+    - Need might be negated by ability to forward event with "any" data type.
+* Option for providing list of tables to work with in case you aren't 
+  interested in logging all of the tables your Bro instances wants to log.

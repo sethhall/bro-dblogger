@@ -39,6 +39,8 @@ string postgresql_user, postgresql_password, postgresql_db;
 int seconds_between_copyend;
 
 int debugging = 0;
+// By default, show output
+int verbose_output = 1;
 BroConn *bc;
 
 // Only use this if connections to multiple Bro instances is implemented.
@@ -85,8 +87,12 @@ inline std::string stringify(const T& x)
 
 void usage(void)
 	{
-	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database table." << endl <<
- 	"USAGE: bro_dblogger [-h postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl;
+	cout << "bro_dblogger - Listens for the db_log event and pushes data into a database." << endl <<
+		"USAGE: bro_dblogger -hqD [-H postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl << 
+		endl << 
+		"  -h    Display this help message." << endl <<
+		"  -q    Run in quiet mode, only outputting errors." << endl <<
+		"  -D    Enable debugging output from Broccoli (if Broccoli was compiled in debugging mode)." << endl << endl;
 	exit(0);
 	}
 
@@ -109,7 +115,7 @@ BroConn* connect_to_bro(std::string host, std::string port)
 		cerr << endl << "Could not connect to Bro at " << host << ":" << port << endl;
 		exit(-1);
 	} else {
-		if(debugging)
+		if(verbose_output)
 			cerr << "Connected to Bro (" << host << ") at " <<
 			        host << ":" << port << endl;
 	}
@@ -130,7 +136,7 @@ int connect_to_postgres(std::string table)
 		exit(-1);
 		}
 
-	if(debugging)
+	if(verbose_output)
 		cout << endl << "Connecting to PostgreSQL";
 	while( PQconnectPoll(pg_conns[table].conn) != PGRES_POLLING_OK )
 		{
@@ -140,20 +146,20 @@ int connect_to_postgres(std::string table)
 			exit(-1);
 			}
 			
-		if(debugging)
+		if(verbose_output)
 			{
 			cout << "."; 
 			cout.flush();
 			}
 		sleep(1);
 		}
-	if(debugging)
+	if(verbose_output)
 		cout << "done" << endl;
 
 	PQsetnonblocking(pg_conns[table].conn, 1);
 	if(PQisnonblocking(pg_conns[table].conn))
 		{
-		if(debugging)
+		if(verbose_output)
 			cout << "PostgreSQL is in non-blocking mode" << endl;
 		}
 	return 0;
@@ -163,7 +169,7 @@ void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *met
 	{
 	char *error_message = NULL;
 	
-	if(debugging)
+	if(verbose_output)
 		cout << endl << "Flushing all active COPY queries to the database" << endl;
 	
 	if( meta->ev_numargs > 0 )
@@ -176,7 +182,7 @@ void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *met
 			cerr << "ERROR: " << PQerrorMessage(iter->second.conn) << error_message << endl;
 		else
 			{
-			if(debugging)
+			if(verbose_output)
 				cout << endl << "Inserting " << iter->second.records << " records into " << iter->first << "." << endl;
 			}
 		
@@ -199,7 +205,7 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		
 	table = (const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data );
 
-	if(debugging)
+	if(verbose_output)
 		cout << "Flushing active COPY query for table '" << table << "' to the database" << endl;
 
 	if(pg_conns.count(table) > 0)
@@ -208,7 +214,7 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
 		else
 			{
-			if(debugging)
+			if(verbose_output)
 				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 		}
@@ -344,7 +350,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	PQclear(result);
 	if(result_status != PGRES_COPY_IN)
 		{
-		if(debugging)
+		if(verbose_output)
 			cout << endl << "Executing: " << pg_conns[table].query << endl;
 		
 		result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
@@ -359,7 +365,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			}
 		}
 
-	if(debugging)
+	if(verbose_output)
 		{
 		cout << ".";
 		cout.flush();
@@ -380,7 +386,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			}
 		else
 			{
-			if(debugging)
+			if(verbose_output)
 				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 			
@@ -413,7 +419,7 @@ int main(int argc, char **argv)
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
-	while ( (opt = getopt(argc, argv, "d:h:p:u:P:Ds:?")) != -1)
+	while ( (opt = getopt(argc, argv, "d:hH:p:u:P:qDs:?")) != -1)
 		{
 		switch (opt)
 			{
@@ -421,17 +427,21 @@ int main(int argc, char **argv)
 				postgresql_db = optarg;
 				break;
 			
+			case 'q':
+				verbose_output = 0;
+				break;
+				
 			case 'D':
 				debugging++;
 				
-				if (debugging > 1)
+				if (debugging > 0)
 					bro_debug_messages = 1;
 				
-				if (debugging > 2)
+				if (debugging > 1)
 					bro_debug_calltrace = 1;
 				break;
 			
-			case 'h':
+			case 'H':
 				postgresql_host = optarg;
 				break;
 			
@@ -457,9 +467,13 @@ int main(int argc, char **argv)
 				break;
 			}
 		}
- 
+		 
 	argc -= optind;
 	argv += optind;
+	
+	if( postgresql_db.compare("") == 0 ||
+	    argc < 2 )
+		usage();
 
 	BroConn *bc;	
 	for(int i=0; i<argc; i+=2)
