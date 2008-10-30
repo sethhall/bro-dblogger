@@ -472,8 +472,7 @@ int main(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 	
-	if( postgresql_db.compare("") == 0 ||
-	    argc < 2 )
+	if( postgresql_db.compare("") == 0 || argc < 2 )
 		usage();
 
 	BroConn *bc;	
