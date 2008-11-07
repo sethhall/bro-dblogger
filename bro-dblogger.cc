@@ -539,8 +539,8 @@ int main(int argc, char **argv)
 			timeout.tv_sec = 5;
 			timeout.tv_usec = 0;
 			
-			//BUG: If I don't do this for each loop, the select doesn't trigger
-			//     with incoming data and the timeout fires eventually.
+			//BUG?: If I don't do this for each loop, the select doesn't trigger
+			//      with incoming data and the timeout fires eventually.
 			FD_ZERO(&readfds);
 			FD_SET(fd, &readfds);
 			
@@ -560,11 +560,12 @@ int main(int argc, char **argv)
 					sleep(3);
 					}
 					
-				// This is run when the select timeout is hit.
+				// This is run when the select timeout is reached.
 				if(readsocks == 0)
 					{
 					int flush_count = flush_tables(true);
-					cout << "Flushed " << flush_count << " table(s) based on last flush time." << endl;
+					if(verbose_output>1)
+						cout << "Flushed " << flush_count << " table(s) based on last-flush time." << endl;
 					}
 				}
 			else 
