@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <errno.h>
+#include <signal.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -439,7 +440,6 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 /* Signal handler for SIGINT. */
 void SIGINT_handler (int signum)
 	{
-	assert (signum == SIGINT);
 	flush_tables(false);
 	cout << "Finished flushing current queries.  Now quitting." << endl;
 	exit(0);
