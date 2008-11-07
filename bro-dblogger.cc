@@ -435,6 +435,15 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	user_data=NULL;
 	meta=NULL;	
 	}
+	
+/* Signal handler for SIGINT. */
+void SIGINT_handler (int signum)
+	{
+	assert (signum == SIGINT);
+	flush_tables(false);
+	cout << "Finished flushing current queries.  Now quitting." << endl;
+	exit(0);
+	}
 
 int main(int argc, char **argv)
 	{
@@ -454,6 +463,8 @@ int main(int argc, char **argv)
 	postgresql_host = default_postgresql_host;
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
+
+	signal (SIGINT, SIGINT_handler);
 
 	while ( (opt = getopt(argc, argv, "d:hH:p:u:P:vDs:?")) != -1)
 		{
