@@ -39,8 +39,8 @@ string postgresql_user, postgresql_password, postgresql_db;
 int seconds_between_copyend;
 
 int debugging = 0;
-// By default, show output
-int verbose_output = 1;
+// By default, don't show output
+int verbose_output = 0;
 BroConn *bc;
 
 // Only use this if connections to multiple Bro instances is implemented.
@@ -91,7 +91,7 @@ void usage(void)
 		"USAGE: bro_dblogger -hqD [-s seconds] [-H postgres_host=localhost] [-p postgres_port=5432] -d database_name -u postgres_user [-P postgres_password] bro_host bro_port" << endl << 
 		endl << 
 		"  -h       Display this help message." << endl <<
-		"  -q       Run in quiet mode, only outputting errors." << endl <<
+		"  -v       Increase verbosity.  By default only show errors." << endl <<
 		"  -s secs  Number of seconds between database flushes (default 30)." << endl <<
 		"  -D       Enable debugging output from Broccoli (if Broccoli was compiled in debugging mode)." << endl << endl;
 	exit(0);
@@ -101,10 +101,6 @@ BroConn* connect_to_bro(std::string host, std::string port)
 	{
 	BroConn *conn;
 	
-	// now connect to the bro host - on failure, try again three times
-	// the flags here are telling us to block on connect, reconnect in the
-	// event of a connection failure, and queue up events in the event of a
-	// failure to the bro host
 	if (! (conn = bro_conn_new_str( (host + ":" + port).c_str(), BRO_CFLAG_NONE)))
 		{
 		cerr << endl << "Could not connect to Bro (" << host << ") at " <<
@@ -126,11 +122,13 @@ BroConn* connect_to_bro(std::string host, std::string port)
 	
 int connect_to_postgres(std::string table)
 	{
-	if(pg_conns.count(table)>0)
+	if( pg_conns.count(table)>0 )
 		return 0;
 	
 	std::string connect_string =
-		"host="+postgresql_host+" port="+postgresql_port+" user="+postgresql_user+" password="+postgresql_password+" dbname="+postgresql_db+" ";
+		"host="+postgresql_host+" port="+postgresql_port+
+		" user="+postgresql_user+" password="+postgresql_password+
+		" dbname="+postgresql_db;
 	if( !(pg_conns[table].conn = PQconnectStart(connect_string.c_str())) )
 		{
 		cerr << "Total screw up with the postgres connection" << endl;
@@ -138,7 +136,7 @@ int connect_to_postgres(std::string table)
 		}
 
 	if(verbose_output)
-		cout << endl << "Connecting to PostgreSQL";
+		cout << "Connecting to PostgreSQL";
 	while( PQconnectPoll(pg_conns[table].conn) != PGRES_POLLING_OK )
 		{
 		if( PQstatus(pg_conns[table].conn) == CONNECTION_BAD )
@@ -157,45 +155,85 @@ int connect_to_postgres(std::string table)
 	if(verbose_output)
 		cout << "done" << endl;
 
-	PQsetnonblocking(pg_conns[table].conn, 1);
-	if(PQisnonblocking(pg_conns[table].conn))
-		{
-		if(verbose_output)
-			cout << "PostgreSQL is in non-blocking mode" << endl;
-		}
+	//PQsetnonblocking(pg_conns[table].conn, 1);
+	//if( PQisnonblocking(pg_conns[table].conn) )
+	//	{
+	//	if(verbose_output)
+	//		cout << "PostgreSQL is in non-blocking mode" << endl;
+	//	}
 	return 0;
 	}
 	
+int flush_table(std::string table, bool use_timeout)
+	{
+	PGresult *result=NULL;
+	int result_status=0;
+	char *error_message = NULL;
+	time_t now_time = time((time_t *)NULL);
+	
+	result = PQgetResult(pg_conns[table].conn);
+	result_status = PQresultStatus(result);
+	PQclear(result);
+	if( result_status != PGRES_COPY_IN )
+		return 0;
+
+	if( use_timeout && 
+	    difftime(now_time, pg_conns[table].last_insert) < 
+	      seconds_between_copyend )
+		return 0;
+
+	if( pg_conns.count(table) > 0 )
+		{
+		if(PQputCopyEnd(pg_conns[table].conn, error_message) == 1)
+			{
+			if(verbose_output)
+				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+			}
+		else
+			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
+			return -1;
+		}
+	else
+		{
+		cerr << "Attempted to flush table '" << table << "', but no active query for that table exists." << endl;
+		return 0;
+		}
+	
+	return pg_conns[table].records;
+	}
+	
+int flush_tables(bool use_timeout)
+	{
+	int flushed=0;
+
+	// Iterator for finishing all existing queries by their timeout.
+	map<string,PGConnection>::iterator iter;
+	for( iter = pg_conns.begin(); iter != pg_conns.end(); iter++ )
+		{
+		if(flush_table(iter->first, use_timeout))
+			flushed++;
+		}
+	return flushed;
+	}
+
 void db_log_flush_all_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
-	char *error_message = NULL;
+	int total_flushed = 0;
 	
 	if(verbose_output)
-		cout << endl << "Flushing all active COPY queries to the database" << endl;
+		cout << "Flushing all active COPY queries to the database" << endl;
 	
 	if( meta->ev_numargs > 0 )
 		cerr << "db_log_flush_all takes no arguments, but " << meta->ev_numargs << " were given" << endl;
 	
-	map<string,PGConnection>::iterator iter;   
-	for( iter = pg_conns.begin(); iter != pg_conns.end(); iter++ )
-		{
-		if(PQputCopyEnd(iter->second.conn, error_message) != 1)
-			cerr << "ERROR: " << PQerrorMessage(iter->second.conn) << error_message << endl;
-		else
-			{
-			if(verbose_output)
-				cout << endl << "Inserting " << iter->second.records << " records into " << iter->first << "." << endl;
-			}
-		
-		}
-		
+	total_flushed = flush_tables(false);
+	
 	user_data=NULL;
 	meta=NULL;	
 	}
 	
 void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
-	char *error_message = NULL;
 	std::string table;
 
 	if( meta->ev_numargs != 1 )
@@ -206,23 +244,7 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		
 	table = (const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data );
 
-	if(verbose_output)
-		cout << "Flushing active COPY query for table '" << table << "' to the database" << endl;
-
-	if(pg_conns.count(table) > 0)
-		{
-		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
-			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
-		else
-			{
-			if(verbose_output)
-				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
-			}
-		}
-	else
-		{
-		cerr << "Attempted to flush table '" << table << "', but no active query for that table exists." << endl;
-		}
+	flush_table(table, false);
 
 	user_data=NULL;
 	meta=NULL;	
@@ -234,6 +256,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
 	int type=0;
 	int diff_seconds;
+	time_t now_time = time((time_t *)NULL);
 	char *error_message = NULL;
 	
 	struct in_addr ip={0};
@@ -243,6 +266,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	
 	PGresult *result;
 	int result_status;
+	int query_exists = 0;
 	
 	if( meta->ev_numargs != 2 ||
 	    meta->ev_args[0].arg_type != BRO_TYPE_STRING ||
@@ -253,6 +277,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		}
 		
 	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));	
+	query_exists = pg_conns.count(table);
 
 	// If try_it is false, skip all of this.  This query has had a fatal error.
 	if( pg_conns.count(table)>0 && !pg_conns[table].try_it )
@@ -271,15 +296,19 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		if(i>0)
 			{
 			output_value.append("\t");
-			field_names.append(", ");
+			if( !query_exists )
+				field_names.append(", ");
 			}
 		// type needs to be zero so that it can be assigned with
 		// whatever type the record value actually is.
 		type=0;
 		data = bro_record_get_nth_val(r, i, &type);
 		
-		field_name = bro_record_get_nth_name(r, i);
-		field_names.append(field_name);
+		if( !query_exists )
+			{
+			field_name = bro_record_get_nth_name(r, i);
+			field_names.append(field_name);
+			}
 		
 		std::string str;
 		int x;
@@ -287,7 +316,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		
 		if(data==NULL)
 			{
-			cerr << "data couldn't be grabbed from record!" << endl;
+			cerr << "data couldn't be extracted from record!" << endl;
 			return;
 			}
 		switch (type)
@@ -337,11 +366,11 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		}
 		
 	// Connect to the database for the current table if not already done.
-	if( pg_conns.count(table)<1 )
+	if( !query_exists )
 		{
 		connect_to_postgres(table);
 		pg_conns[table].records = 0;
-		pg_conns[table].last_insert = time((time_t *)NULL);
+		pg_conns[table].last_insert = now_time;
 		pg_conns[table].try_it = true;
 		pg_conns[table].query = "COPY " + table + " (" + field_names + ") FROM STDIN";
 		}
@@ -352,8 +381,9 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	if(result_status != PGRES_COPY_IN)
 		{
 		if(verbose_output)
-			cout << endl << "Executing: " << pg_conns[table].query << endl;
+			cout << "Executing: " << pg_conns[table].query << endl;
 		
+		pg_conns[table].last_insert = now_time;
 		result = PQexec(pg_conns[table].conn, pg_conns[table].query.c_str());
 		result_status = PQresultStatus(result);
 		PQclear(result);
@@ -366,9 +396,11 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			}
 		}
 
-	if(verbose_output)
+	if(verbose_output>1)
 		{
-		cout << ".";
+		// Instead of just a dot, output the first character of the table for 
+		// visual accounting.
+		cout << table[0];
 		cout.flush();
 		}
 		
@@ -378,7 +410,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	else
 		pg_conns[table].records++;
 		
-	diff_seconds = difftime(time((time_t *)NULL), pg_conns[table].last_insert);
+	diff_seconds = difftime(now_time, pg_conns[table].last_insert);
 	if(diff_seconds > seconds_between_copyend)
 		{
 		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
@@ -388,7 +420,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		else
 			{
 			if(verbose_output)
-				cout << endl << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
+				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 			
 		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
@@ -397,7 +429,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			sleep(1);
 			}
 		pg_conns[table].records=0;
-		pg_conns[table].last_insert = time((time_t *)NULL);
+		pg_conns[table].last_insert = now_time;
 		}
 	
 	user_data=NULL;
@@ -415,21 +447,24 @@ int main(int argc, char **argv)
 	int opt = 0;
 	extern char *optarg;
 	extern int optind;
+	
+	int readsocks;
+	struct timeval timeout;  /* Timeout for select */
 
 	postgresql_host = default_postgresql_host;
 	postgresql_port = default_postgresql_port;
 	seconds_between_copyend = default_seconds_between_copyend;
 
-	while ( (opt = getopt(argc, argv, "d:hH:p:u:P:qDs:?")) != -1)
+	while ( (opt = getopt(argc, argv, "d:hH:p:u:P:vDs:?")) != -1)
 		{
 		switch (opt)
 			{
 			case 'd':
 				postgresql_db = optarg;
 				break;
-			
-			case 'q':
-				verbose_output = 0;
+				
+			case 'v': 
+				verbose_output++;
 				break;
 				
 			case 'D':
@@ -468,19 +503,19 @@ int main(int argc, char **argv)
 				break;
 			}
 		}
-		 
+		
 	argc -= optind;
 	argv += optind;
 	
 	if( postgresql_db.compare("") == 0 || argc < 2 )
 		usage();
 
-	BroConn *bc;	
+	BroConn *bc;
 	for(int i=0; i<argc; i+=2)
 		{
 		string host(argv[i]);
 		string port(argv[i+1]);
-			
+		
 		bc = connect_to_bro(host, port);
 		bro_event_registry_add_compact(bc, "db_log", db_log_event_handler, NULL);
 		bro_event_registry_add_compact(bc, "db_log_flush_all", db_log_flush_all_event_handler, NULL);
@@ -488,11 +523,43 @@ int main(int argc, char **argv)
 		bro_event_registry_request(bc);
 
 		fd = bro_conn_get_fd(bc);
-		FD_ZERO(&readfds);
-		FD_SET(fd, &readfds);
-		while(select(fd+1, &readfds, NULL, NULL, NULL))
+		for(;;)
 			{
-			bro_conn_process_input(bc);
+			timeout.tv_sec = 5;
+			timeout.tv_usec = 0;
+			
+			//BUG: If I don't do this for each loop, the select doesn't trigger
+			//     with incoming data and the timeout fires eventually.
+			FD_ZERO(&readfds);
+			FD_SET(fd, &readfds);
+			
+			readsocks = select(fd+1, &readfds, NULL, NULL, &timeout);
+			
+			// Handle timer expirations AND socket disconnects.
+			if(readsocks <= 0)
+				{
+				// TODO: maybe some reconnect attempt limit?
+				while( !bro_conn_alive(bc) )
+					{
+					cerr << "Bro connection is lost; reconnecting...";
+					if( bro_conn_reconnect(bc) )
+						cerr << "done." << endl;
+					else
+						cerr << "failed!" << endl;
+					sleep(3);
+					}
+					
+				// This is run when the select timeout is hit.
+				if(readsocks == 0)
+					{
+					int flush_count = flush_tables(true);
+					cout << "Flushed " << flush_count << " table(s) based on last flush time." << endl;
+					}
+				}
+			else 
+				{
+				bro_conn_process_input(bc);
+				}
 			}
 		}
 	}
