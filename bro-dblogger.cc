@@ -168,7 +168,7 @@ int connect_to_postgres(std::string table)
 int flush_table(std::string table, bool use_timeout)
 	{
 	PGresult *result=NULL;
-	int result_status=0;
+	ExecStatusType result_status;
 	char *error_message = NULL;
 	time_t now_time = time((time_t *)NULL);
 	
@@ -266,7 +266,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	std::string output_value("");
 	
 	PGresult *result;
-	int result_status;
+	ExecStatusType result_status;
 	int query_exists = 0;
 	
 	if( meta->ev_numargs != 2 ||
@@ -276,12 +276,12 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		cerr << "Arguments to the db_log callback are incorrect! (number and/or type)" << endl;
 		return;
 		}
-		
-	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));	
+	
+	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));		
 	query_exists = pg_conns.count(table);
 
 	// If try_it is false, skip all of this.  This query has had a fatal error.
-	if( pg_conns.count(table)>0 && !pg_conns[table].try_it )
+	if( query_exists && !pg_conns[table].try_it )
 		{
 		cerr << "ERROR: Some earlier fatal error with " << table << endl;
 		return;
@@ -311,7 +311,8 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			field_names.append(field_name);
 			}
 		
-		std::string str;
+		std::string str("");
+		std::string single_value("");
 		int x;
 		int str_begin=0;
 		
@@ -323,10 +324,11 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 		switch (type)
 			{
 			case BRO_TYPE_INT:
-				output_value.append(stringify(*((int *) data)));
+				single_value = stringify(*((int *) data));
 				break;
 			case BRO_TYPE_PORT:
-				output_value.append(stringify( (*((bro_port *) data)).port_num ));
+				// TODO: handle the port's protocol somehow.
+				single_value = stringify( (*((bro_port *) data)).port_num );
 				break;
 			case BRO_TYPE_STRING:
 				str = stringify(bro_string_get_data((BroString*) data));
@@ -342,28 +344,31 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 						str_begin++;
 						}
 					}
-				output_value.append(str);
+				single_value = str;
 				break;
 			case BRO_TYPE_COUNT:
-				output_value.append(stringify(*((uint32 *) data)));
+				single_value = stringify(*((uint32 *) data));
 				break;
 			case BRO_TYPE_TIME:
 			case BRO_TYPE_DOUBLE:
 			case BRO_TYPE_INTERVAL:
-				output_value.append(stringify(*((double *) data)));
+				single_value = stringify(*((double *) data));
 				break;
 			case BRO_TYPE_BOOL:
-				output_value.append(*((int *) data) ? "true" : "false");
+				single_value = *((int *) data) ? "true" : "false";
 				break;
 			case BRO_TYPE_IPADDR:
 				ip.s_addr = *((uint32 *) data);
-				output_value.append(inet_ntoa(ip));
+				single_value = inet_ntoa(ip);
 				break;
 			default:
 				cerr << "unhandled data type" << endl;
-				output_value.append("\\N");
 				break;
 			}
+			
+			if( single_value == "" )
+					single_value = "\\N";
+			output_value.append(single_value);
 		}
 		
 	// Connect to the database for the current table if not already done.
@@ -424,6 +429,15 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 			
+		result = PQgetResult(pg_conns[table].conn);
+		result_status = PQresultStatus(result);
+		PQclear(result);
+		if(result_status != PGRES_COMMAND_OK)
+			{
+			cerr << "Error when ending copy on " << table << " :: " 
+				 << PQerrorMessage(pg_conns[table].conn);
+			}
+			
 		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
 			{
 			//cout << "pg is busy" << endl;
@@ -449,7 +463,8 @@ int main(int argc, char **argv)
 	{
 	bro_debug_messages  = 0;
 	bro_debug_calltrace = 0;
-
+	BroConn *bc;
+	
 	int fd;
 	fd_set readfds;
 	
@@ -520,8 +535,7 @@ int main(int argc, char **argv)
 	
 	if( postgresql_db.compare("") == 0 || argc < 2 )
 		usage();
-
-	BroConn *bc;
+	
 	for(int i=0; i<argc; i+=2)
 		{
 		string host(argv[i]);
@@ -545,6 +559,9 @@ int main(int argc, char **argv)
 			FD_SET(fd, &readfds);
 			
 			readsocks = select(fd+1, &readfds, NULL, NULL, &timeout);
+
+			// Always attempt to process input.
+			bro_conn_process_input(bc);
 			
 			// Handle timer expirations AND socket disconnects.
 			if(readsocks <= 0)
@@ -557,6 +574,7 @@ int main(int argc, char **argv)
 						cerr << "done." << endl;
 					else
 						cerr << "failed!" << endl;
+					bro_conn_process_input(bc);
 					sleep(3);
 					}
 					
@@ -565,12 +583,10 @@ int main(int argc, char **argv)
 					{
 					int flush_count = flush_tables(true);
 					if(verbose_output>1)
-						cout << "Flushed " << flush_count << " table(s) based on last-flush time." << endl;
+						cout << "Flushed " << flush_count 
+						     << " table(s) based on last-flush time." 
+						     << endl;
 					}
-				}
-			else 
-				{
-				bro_conn_process_input(bc);
 				}
 			}
 		}
