@@ -456,6 +456,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 					cout << "After munging: " << s << endl;
 					
 				single_value = s;
+				delete [] s;
 				break;
 			case BRO_TYPE_COUNT:
 				single_value = stringify(*((uint32 *) data));
@@ -476,6 +477,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				cerr << "unhandled data type" << endl;
 				break;
 			}
+			delete [] hex_fmt;
 			
 			if( single_value == "" )
 					single_value = "\\N";
