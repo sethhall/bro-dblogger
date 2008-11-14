@@ -337,9 +337,14 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			field_names.append(field_name);
 			}
 		
+		// These vars are all involved with string handling
 		char *str=NULL;
 		char *s=NULL;
 		char *sp=NULL; 
+		BroString *bs=NULL;
+		uint string_length=0;
+		char *hex_fmt = new char[2];
+		
 		int tmp_char=0;
 		std::string single_value("");
 		
@@ -360,15 +365,13 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			case BRO_TYPE_STRING:
 				// TODO: UTF8 input is handled appropriately
 				//       UTF16/32 will come through looking very weird.
-				BroString *bs = (BroString*) data;
+				bs = (BroString*) data;
 				str = (char *) bro_string_get_data(bs);
-				uint string_length = bro_string_get_length(bs);
+				string_length = bro_string_get_length(bs);
 				
 				// Maxmimum character expansion is as \\xHH, so a factor of 5.
 				s = new char[string_length*5 + 1];	// +1 is for final '\0'
 				sp = s;
-				
-				char *hex_fmt = new char[2];
 				
 				for ( uint i=0; i < string_length; ++i )
 					{
