@@ -3,7 +3,12 @@ CPPFLAGS=-g -Wall -L/cluster/lib -I/cluster/include -I/usr/local/include -L/usr/
 CFLAGS=${CPPFLAGS}
 LDFLAGS=-lbroccoli -lpq
 
-bro-dblogger: bro-dblogger.cc
+bro-dblogger: bro-dblogger.cc utf_validate.o
+
+utf_validate.o: utf_validate.c
+	g++ -c -o utf_validate.o utf_validate.c
+	
+	
 
 clean:
 	rm -f bro-dblogger 

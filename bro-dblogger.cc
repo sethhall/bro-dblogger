@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <time.h>
+#include <iconv.h>
+
+#include "utf_validate.h"
 
 extern "C" {
 	#include "broccoli.h"
@@ -171,6 +174,7 @@ int flush_table(std::string table, bool use_timeout)
 	ExecStatusType result_status;
 	char *error_message = NULL;
 	time_t now_time = time((time_t *)NULL);
+	int flushed_records = 0;
 	
 	result = PQgetResult(pg_conns[table].conn);
 	result_status = PQresultStatus(result);
@@ -191,8 +195,28 @@ int flush_table(std::string table, bool use_timeout)
 				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
 			}
 		else
+			{
 			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
 			return -1;
+			}
+		
+		result = PQgetResult(pg_conns[table].conn);
+		result_status = PQresultStatus(result);
+		PQclear(result);
+		if(result_status != PGRES_COMMAND_OK)
+			{
+			cerr << "Error when ending copy on \"" << table << "\" table :: " 
+				 << PQerrorMessage(pg_conns[table].conn);
+			}
+			
+		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
+			{
+			//cout << "pg is busy" << endl;
+			sleep(1);
+			}
+		flushed_records = pg_conns[table].records;
+		pg_conns[table].records=0;
+		pg_conns[table].last_insert = now_time;
 		}
 	else
 		{
@@ -200,7 +224,7 @@ int flush_table(std::string table, bool use_timeout)
 		return 0;
 		}
 	
-	return pg_conns[table].records;
+	return flushed_records;
 	}
 	
 int flush_tables(bool use_timeout)
@@ -251,14 +275,11 @@ void db_log_flush_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	meta=NULL;	
 	}
 
-	
 //global db_log: event(db_table: string, data: any);
 void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	{
 	int type=0;
-	int diff_seconds;
 	time_t now_time = time((time_t *)NULL);
-	char *error_message = NULL;
 	
 	struct in_addr ip={0};
 	std::string table("");
@@ -269,15 +290,21 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	ExecStatusType result_status;
 	int query_exists = 0;
 	
-	if( meta->ev_numargs != 2 ||
-	    meta->ev_args[0].arg_type != BRO_TYPE_STRING ||
+	if( meta->ev_numargs != 2 )
+		{
+		cerr << "The db_log event takes 2 arguments, but "
+		     << meta->ev_numargs << " were given." << endl;
+		return;
+		}
+		
+	if( meta->ev_args[0].arg_type != BRO_TYPE_STRING ||
 	    meta->ev_args[1].arg_type != BRO_TYPE_RECORD)
 		{
-		cerr << "Arguments to the db_log callback are incorrect! (number and/or type)" << endl;
+		cerr << "The db_log event takes the argument types: (string, record)." << endl;
 		return;
 		}
 	
-	table.append((const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data));		
+	table = (const char*) bro_string_get_data( (BroString*) meta->ev_args[0].arg_data);
 	query_exists = pg_conns.count(table);
 
 	// If try_it is false, skip all of this.  This query has had a fatal error.
@@ -311,10 +338,11 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			field_names.append(field_name);
 			}
 		
-		std::string str("");
+		char *str=NULL;
+		char *s=NULL;
+		char *sp=NULL; 
+		int tmp_char=0;
 		std::string single_value("");
-		int x;
-		int str_begin=0;
 		
 		if(data==NULL)
 			{
@@ -331,20 +359,101 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 				single_value = stringify( (*((bro_port *) data)).port_num );
 				break;
 			case BRO_TYPE_STRING:
-				str = stringify(bro_string_get_data((BroString*) data));
-				// Double up backslashes so as not to attempt to put 
-				// raw data into the database.
-				for( x=str.length(); x>str_begin; x--)
+				// TODO: UTF8 input is handled appropriately
+				//       UTF16/32 will come through looking very weird.
+				BroString *bs = (BroString*) data;
+				str = (char *) bro_string_get_data(bs);
+				uint string_length = bro_string_get_length(bs);
+				
+				// Maxmimum character expansion is as \\xHH, so a factor of 5.
+				s = new char[string_length*5 + 1];	// +1 is for final '\0'
+				sp = s;
+				
+				char *hex_fmt = new char[2];
+				
+				for ( uint i=0; i < string_length; ++i )
 					{
-					if(str.compare(x,1,"\\")==0)
-						str.insert(x+1, "\\");
-					if(str.compare(x,1,"\t")==0)
+					tmp_char = str[i]&0xFF;
+					//printf("char (%d): %02x\n", i, tmp_char);
+					if ( tmp_char == '\0' )
 						{
-						str.erase(x,1);
-						str_begin++;
+						*sp++ = '\\'; *sp++ = '\\'; *sp++ = '0';
+						}
+						
+					// TODO: maybe deal with UTF16?
+					//else if ( tmp_char > 244 )
+					//	{
+					//	if (string_length-1 > i)
+					//		{
+					//		   I doubt if many of the string we'd be encountering
+					//		   would actually include the BOM though so
+					//		   this technique probably wouldn't help much.
+					//		if ( tmp_char == 254 && str[i+1]&0xFF == 255 )
+					//			cout << "UTF16-BOM Big Endian" << endl;
+					//		else if ( tmp_char == 255 && str[i+1]&0xFF == 254 )
+					//			cout << "UTF16-BOM Little Endian" << endl;
+					//		}
+					//	}
+						
+					else if ( 193 < tmp_char && tmp_char < 245 )
+						{
+						int byte_count=0;
+						if(193 < tmp_char && tmp_char < 224)
+							byte_count=2;
+						else if(223 < tmp_char && tmp_char < 240)
+							byte_count=3;
+						else if(239 < tmp_char && tmp_char < 245)
+							byte_count=4;
+						
+						//cout << byte_count << " byte sequence " << i << endl;
+						
+						// Don't overrun the buffer in case of invalid UTF8.
+						if((int) (string_length-1-i) > byte_count)
+							byte_count = string_length-i-3;
+						
+						if(utf_is_valid(str+i, byte_count))
+							{
+							// if utf8 is valid, include it verbatim
+							*sp++ = tmp_char;
+							for(int y=0; y<byte_count-1; ++y)
+								*sp++ = str[++i];
+							}
+						}
+                
+					else if ( tmp_char == '\x7f' )
+						{
+						*sp++ = '^'; *sp++ = '?';
+						}
+                    
+					else if ( tmp_char <= 26 )
+						{
+						*sp++ = '^'; *sp++ = tmp_char + 'A' - 1;
+						}
+					
+					else if ( tmp_char == '\\' )
+						{
+						*sp++ = '\\'; *sp++ = '\\';
+						}
+					
+					else if ( tmp_char > 126 )
+						{
+						// extended ascii and anything else not yet handled
+						// should be displayed as hex.
+						*sp++ = '\\'; *sp++ = '\\'; *sp++ = 'x';
+						sprintf(hex_fmt, "%02x", tmp_char);
+						*sp++ = hex_fmt[0]; *sp++ = hex_fmt[1];
+						}
+					else
+						{
+						*sp++ = tmp_char;
 						}
 					}
-				single_value = str;
+				*sp++ = '\0';	// NUL-terminate.
+                
+				if ( verbose_output > 1 )
+					cout << "After munging: " << s << endl;
+					
+				single_value = s;
 				break;
 			case BRO_TYPE_COUNT:
 				single_value = stringify(*((uint32 *) data));
@@ -402,7 +511,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 			}
 		}
 
-	if(verbose_output>1)
+	if(verbose_output>2)
 		{
 		// Instead of just a dot, output the first character of the table for 
 		// visual accounting.
@@ -416,36 +525,7 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 	else
 		pg_conns[table].records++;
 		
-	diff_seconds = difftime(now_time, pg_conns[table].last_insert);
-	if(diff_seconds > seconds_between_copyend)
-		{
-		if(PQputCopyEnd(pg_conns[table].conn, error_message) != 1)
-			{
-			cerr << "ERROR: " << PQerrorMessage(pg_conns[table].conn) << error_message << endl;
-			}
-		else
-			{
-			if(verbose_output)
-				cout << "Inserting " << pg_conns[table].records << " records into " << table << "." << endl;
-			}
-			
-		result = PQgetResult(pg_conns[table].conn);
-		result_status = PQresultStatus(result);
-		PQclear(result);
-		if(result_status != PGRES_COMMAND_OK)
-			{
-			cerr << "Error when ending copy on " << table << " :: " 
-				 << PQerrorMessage(pg_conns[table].conn);
-			}
-			
-		while(PQconsumeInput(pg_conns[table].conn) && PQisBusy(pg_conns[table].conn))
-			{
-			//cout << "pg is busy" << endl;
-			sleep(1);
-			}
-		pg_conns[table].records=0;
-		pg_conns[table].last_insert = now_time;
-		}
+	flush_table(table, true);
 	
 	user_data=NULL;
 	meta=NULL;	
@@ -454,8 +534,21 @@ void db_log_event_handler(BroConn *bc, void *user_data, BroEvMeta *meta)
 /* Signal handler for SIGINT. */
 void SIGINT_handler (int signum)
 	{
+	// Shut down the connection to Bro
+	if( !bro_conn_delete(bc) )
+		cerr << "There was a problem shutting down the Bro connection." << endl;
+	
+	// Flush all existing queries to the database.
 	flush_tables(false);
-	cout << "Finished flushing current queries.  Now quitting." << endl;
+	
+	// Shut down and delete all PostgreSQL connections
+	map<string,PGConnection>::iterator iter;
+	for( iter = pg_conns.begin(); iter != pg_conns.end(); iter++ )
+		{
+			PQfinish(pg_conns[iter->first].conn);
+		}
+		
+	cout << "Finished flushing current queries and freeing memory.  Now quitting." << endl;
 	exit(0);
 	}
 
@@ -463,7 +556,6 @@ int main(int argc, char **argv)
 	{
 	bro_debug_messages  = 0;
 	bro_debug_calltrace = 0;
-	BroConn *bc;
 	
 	int fd;
 	fd_set readfds;
