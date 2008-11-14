@@ -17,7 +17,6 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <time.h>
-#include <iconv.h>
 
 #include "utf_validate.h"
 
